@@ -261,6 +261,7 @@ static int usage(int rc)
 {
 	fprintf(stderr, "Usage: %s [OPTIONS] SERVER CHANNEL\n\n"
 		"Options:\n"
+		"  -d, --debug           Enable debug messages\n"
 		"  -h, --help            This help text\n"
 		"      --password=PWD    Send PASS PWD to connect, use SSL!\n"
 		"  -p, --port=PORT       Connect to this port, default: 6667\n"
@@ -281,6 +282,7 @@ int main(int argc, char *argv[])
 	int c;
 	char server[256] = SERVER;
 	struct option long_options[] = {
+		{ "debug",    0, NULL, 'd' },
 		{ "help",     0, NULL, 'h' },
 		{ "password", 1, NULL, 'l' },
 		{ "port",     1, NULL, 'p' },
@@ -291,8 +293,12 @@ int main(int argc, char *argv[])
 
 	signal(SIGINT,  sigint_cb);
 	signal(SIGTERM, sigint_cb);
-	while ((c = getopt_long(argc, argv, "h?l:p:sv", long_options, NULL)) != EOF) {
+	while ((c = getopt_long(argc, argv, "dh?l:p:sv", long_options, NULL)) != EOF) {
 		switch(c) {
+		case 'd':
+			debug = 1;
+			break;
+
 		case 'l':
 			pass = strdup(optarg);
 			break;
