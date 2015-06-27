@@ -15,15 +15,13 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define _GNU_SOURCE
-
 #include <arpa/inet.h>		/* inet_pton() */
 #include <errno.h>
 #include <error.h>
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>		/* _GNU_SOURCE => strcasestr() */
+#include <string.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>		/* close() */
@@ -39,7 +37,7 @@
 
 #define SERVER  "127.0.0.1"
 #define PORT    6667
-#define CHANNEL "spam"
+#define CHANNEL "ubot"
 #define NICK    "ubot"
 #define NAME    "ubot rulez"
 
@@ -47,6 +45,7 @@ static SSL     *ssl;
 static SSL_CTX *ssl_ctx;
 static int      debug = 1;
 static int      port = PORT;
+static char    *pass = NULL;
 extern char  *__progname;
 
 static int ssl_init(void)
@@ -168,6 +167,8 @@ static int do_send(int sd, const char *fmt, ...)
 	if (num <= 0)
 		return -1;
 
+	DBG(">> %s\n", chomp(buf));
+
 	return 0;
 }
 
@@ -185,6 +186,7 @@ static ssize_t do_recv(int sd, char *buf, size_t len)
 
 	buf[num] = 0;
 	chomp(buf);
+	DBG("<< %s", buf);
 
 	return 0;
 }
@@ -192,21 +194,25 @@ static ssize_t do_recv(int sd, char *buf, size_t len)
 static int bot(char *server, int port, char *channel)
 {
 	int sd;
-	char line[256];
+	char buf[2048];
 
 	sd = do_connect(server, port);
 	if (sd < 0)
 		error(1, errno, "Failed connecting to %s:%d", server, port);
 
+	if (pass)
+		do_send(sd, "PASS %s\r\n", pass);
 	do_send(sd, "NICK %s\r\n", NICK);
-	do_send(sd, "USER %s 0 0 : %s\r\n", NICK, NAME);
-	do_send(sd, "JOIN #%s\r\n", channel);
+	do_send(sd, "USER %s 0 0 :%s\r\n", NICK, NAME);
+	sleep(2);
 
 	while (1) {
-		if (do_recv(sd, line, sizeof(line))) {
-			DBG("Received line: %s", line);
-			if (!strcasestr(line, "PING")) {
-				char *pos = strstr(line, " ") + 1;
+		if (!do_recv(sd, buf, sizeof(buf))) {
+			if (strstr(buf, "001 "))
+				do_send(sd, "JOIN #%s\r\n", channel);
+
+			if (strstr(buf, "PING ")) {
+				char *pos = strstr(buf, " ") + 1;
 				do_send(sd, "PONG %s\r\n", pos);
 			}
 		}
@@ -220,6 +226,7 @@ static int usage(int rc)
 	fprintf(stderr, "Usage: %s [OPTIONS] SERVER CHANNEL\n\n"
 		"Options:\n"
 		"  -h, --help            This help text\n"
+		"      --password=PWD    Send PASS PWD to connect, use SSL!\n"
 		"  -p, --port=PORT       Connect to this port, default: 6667\n"
 		"  -s, --ssl             Connect using SSL/TLS\n"
 		"  -v, --version         Show version\n\n", __progname);
@@ -233,15 +240,20 @@ int main(int argc, char *argv[])
 	char channel[42] = CHANNEL;
 	char server[256] = SERVER;
 	struct option long_options[] = {
-		{ "help",    0, NULL, 'h' },
-		{ "port",    1, NULL, 'p' },
-		{ "ssl",     0, NULL, 's' },
-		{ "version", 0, NULL, 'v' },
+		{ "help",     0, NULL, 'h' },
+		{ "password", 1, NULL, 'l' },
+		{ "port",     1, NULL, 'p' },
+		{ "ssl",      0, NULL, 's' },
+		{ "version",  0, NULL, 'v' },
 		{ NULL, 0, NULL, 0 }
 	};
 
-	while ((c = getopt_long(argc, argv, "h?p:sv", long_options, NULL)) != EOF) {
+	while ((c = getopt_long(argc, argv, "h?l:p:sv", long_options, NULL)) != EOF) {
 		switch(c) {
+		case 'l':
+			pass = strdup(optarg);
+			break;
+
 		case 'p':
 			port = atoi(optarg);
 			break;
