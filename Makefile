@@ -21,6 +21,8 @@ EXEC        = ubot
 OBJS        = ubot.o
 DEPS        = $(OBJS:.o=.d)
 CFLAGS     += -O2 -W -Wall -g
+CPPFLAGS   += -DVERSION='"$(VERSION)"'
+LDLIBS     += -lssl -lcrypto
 TOPDIR      = $(shell pwd)
 ROOTDIR    ?= $(TOPDIR)
 JUNK        = *~ *.bak *.map *.d *.o DEADJOE *.gdb *.elf core core.*

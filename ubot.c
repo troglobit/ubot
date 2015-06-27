@@ -28,7 +28,14 @@
 #include <netdb.h>
 #include <unistd.h>		/* close() */
 
-#define VERSION "0.1"
+#include <openssl/crypto.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/tls1.h>
+#include <openssl/err.h>
+
+#define DBG(fmt, args...) if (debug) fprintf(stderr, fmt "\n", ##args)
 
 #define SERVER  "127.0.0.1"
 #define PORT    6667
@@ -36,40 +43,92 @@
 #define NICK    "ubot"
 #define NAME    "ubot rulez"
 
-extern char *__progname;
+static SSL     *ssl;
+static SSL_CTX *ssl_ctx;
+static int      debug = 1;
+static int      port = PORT;
+extern char  *__progname;
 
+static int ssl_init(void)
+{
+	SSL_library_init();
+	SSL_load_error_strings();
 
-static FILE *do_connect(char *server, unsigned int port)
+	ssl_ctx = SSL_CTX_new(SSLv23_client_method());
+	if (!ssl_ctx)
+		return -1;
+
+	/* POODLE, only allow TLSv1.x or later */
+	SSL_CTX_set_options(ssl_ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
+
+	ssl = SSL_new(ssl_ctx);
+	if (!ssl)
+		return -1;
+
+#ifdef SSL_MODE_SEND_FALLBACK_SCSV
+	SSL_set_mode(ssl, SSL_MODE_SEND_FALLBACK_SCSV);
+#endif
+
+	return 0;
+}
+
+static int ssl_connect(int sd)
+{
+	char buf[256];
+	X509 *cert;
+
+	SSL_set_fd(ssl, sd);
+	if (-1 == SSL_connect(ssl))
+		return -1;
+
+	DBG("SSL connection using %s", SSL_get_cipher(ssl));
+
+	/* Get server's certificate (note: beware of dynamic allocation) - opt */
+	cert = SSL_get_peer_certificate(ssl);
+	if (!cert)
+		return -1;
+
+	/* Logging some cert details. Please note: X509_NAME_oneline doesn't
+	   work when giving NULL instead of a buffer. */
+	X509_NAME_oneline(X509_get_subject_name(cert), buf, sizeof(buf));
+	DBG("SSL server cert subject: %s", buf);
+	X509_NAME_oneline(X509_get_issuer_name(cert), buf, sizeof(buf));
+	DBG("SSL server cert issuer: %s", buf);
+
+	/* We could do all sorts of certificate verification stuff here before
+	   deallocating the certificate. */
+	X509_free(cert);
+
+	return 0;
+}
+
+static int do_connect(char *server, unsigned int port)
 {
 	int sd, ret;
-	FILE *fp;
 	struct sockaddr_in sin;
 
 	sd = socket(AF_INET, SOCK_STREAM, 0);
 	if (sd < 0)
-		return NULL;
+		return -1;
 
 	memset(&sin, 0, sizeof(sin));
-	if (inet_pton(AF_INET, server, &sin.sin_addr) <= 0) {
-		close(sd);
-		return NULL;
-	}
+	if (inet_pton(AF_INET, server, &sin.sin_addr) <= 0)
+		goto err;
 
 	sin.sin_family = AF_INET;
 	sin.sin_port = htons(port);
 	ret = connect(sd, (struct sockaddr *)&sin, sizeof(sin));
-	if (ret < 0) {
-		close(sd);
-		return NULL;
-	}
+	if (ret < 0)
+		goto err;
 
-	fp = fdopen(sd, "rw");
-	if (!fp) {
-		close(sd);
-		return NULL;
-	}
+	ret = ssl_connect(sd);
+	if (ret < 0)
+		goto err;
 
-	return fp;
+	return sd;
+err:
+	close(sd);
+	return -1;
 }
 
 static char *chomp(char *str)
@@ -88,31 +147,70 @@ static char *chomp(char *str)
 	return str;
 }
 
+static int do_send(int sd, const char *fmt, ...)
+{
+	int num;
+	char buf[256];
+	size_t len;
+	va_list ap;
+
+	va_start(ap, fmt);
+	len = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	if (ssl)
+		num = SSL_write(ssl, buf, len);
+	else
+		num = (int)write(sd, buf, len);
+
+	if (num <= 0)
+		return -1;
+
+	return 0;
+}
+
+static ssize_t do_recv(int sd, char *buf, size_t len)
+{
+	int num;
+
+	if (ssl)
+		num = SSL_read(ssl, buf, (int)len);
+	else
+		num = read(sd, buf, len);
+
+	if (num <= 0)
+		return -1;
+
+	buf[num] = 0;
+	chomp(buf);
+
+	return 0;
+}
+
 static int bot(char *server, int port, char *channel)
 {
-	FILE *fp;
+	int sd;
 	char line[256];
 
-	fp = do_connect(server, port);
-	if (!fp)
+	sd = do_connect(server, port);
+	if (sd < 0)
 		error(1, errno, "Failed connecting to %s:%d", server, port);
 
-	fprintf(fp, "NICK %s\r\n", NICK);
-	fprintf(fp, "USER %s 0 0 : %s\r\n", NICK, NAME);
-	fprintf(fp, "JOIN #%s\r\n", channel);
+	do_send(sd, "NICK %s\r\n", NICK);
+	do_send(sd, "USER %s 0 0 : %s\r\n", NICK, NAME);
+	do_send(sd, "JOIN #%s\r\n", channel);
 
 	while (1) {
-		if (fgets(line, sizeof(line), fp)) {
-			chomp(line);
-
+		if (do_recv(sd, line, sizeof(line))) {
+			DBG("Received line: %s", line);
 			if (!strcasestr(line, "PING")) {
 				char *pos = strstr(line, " ") + 1;
-				fprintf(fp, "PONG %s\r\n", pos);
+				do_send(sd, "PONG %s\r\n", pos);
 			}
 		}
 	}
 
-	return fclose(fp);
+	return close(sd);
 }
 
 static int usage(int rc)
@@ -120,24 +218,27 @@ static int usage(int rc)
 	fprintf(stderr, "Usage: %s [OPTIONS] SERVER CHANNEL\n\n"
 		"Options:\n"
 		"  -h, --help            This help text\n"
-		"  -V, --version         Show version\n\n", __progname);
+		"  -p, --port=PORT       Connect to this port, default: 6667\n"
+		"  -s, --ssl             Connect using SSL/TLS\n"
+		"  -v, --version         Show version\n\n", __progname);
 
 	return rc;
 }
 
 int main(int argc, char *argv[])
 {
-	int c, port = PORT;
+	int c;
 	char channel[42] = CHANNEL;
 	char server[256] = SERVER;
 	struct option long_options[] = {
 		{ "help",    0, NULL, 'h' },
-		{ "version", 0, NULL, 'v' },
 		{ "port",    1, NULL, 'p' },
+		{ "ssl",     0, NULL, 's' },
+		{ "version", 0, NULL, 'v' },
 		{ NULL, 0, NULL, 0 }
 	};
 
-	while ((c = getopt_long(argc, argv, "h?vp:", long_options, NULL)) != EOF) {
+	while ((c = getopt_long(argc, argv, "h?p:sv", long_options, NULL)) != EOF) {
 		switch(c) {
 		case 'p':
 			port = atoi(optarg);
@@ -145,6 +246,11 @@ int main(int argc, char *argv[])
 
 		case 'v':
 			return puts("v" VERSION) == EOF;
+
+		case 's':
+			if (ssl_init())
+				error(1, 0, "Failed creating SSL context, missing library?");
+			break;
 
 		case 'h':
 		case '?':
