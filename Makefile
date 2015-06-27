@@ -21,7 +21,7 @@ EXEC        = ubot
 OBJS        = ubot.o
 DEPS        = $(OBJS:.o=.d)
 CFLAGS     += -O2 -W -Wall -g
-CPPFLAGS   += -DVERSION='"$(VERSION)"'
+CPPFLAGS   += -D_GNU_SOURCE -DVERSION='"$(VERSION)"'
 LDLIBS     += -lssl -lcrypto
 TOPDIR      = $(shell pwd)
 ROOTDIR    ?= $(TOPDIR)

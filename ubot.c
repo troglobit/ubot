@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <error.h>
 #include <getopt.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,11 +41,16 @@
 #define CHANNEL "ubot"
 #define NICK    "ubot"
 #define NAME    "ubot rulez"
+#define PARTMSG "ubot has left the building"
 
 static SSL     *ssl;
 static SSL_CTX *ssl_ctx;
-static int      debug = 1;
+static int      sd = -1;
+static int      debug = 0;
+static int      loop = 1;
 static int      port = PORT;
+static char     partmsg[42] = PARTMSG;
+static char     channel[42] = CHANNEL;
 static char    *pass = NULL;
 extern char  *__progname;
 
@@ -148,7 +154,7 @@ static char *chomp(char *str)
 	return str;
 }
 
-static int do_send(int sd, const char *fmt, ...)
+static int do_send(const char *fmt, ...)
 {
 	int num;
 	char buf[256];
@@ -172,7 +178,7 @@ static int do_send(int sd, const char *fmt, ...)
 	return 0;
 }
 
-static ssize_t do_recv(int sd, char *buf, size_t len)
+static ssize_t do_recv(char *buf, size_t len)
 {
 	int num;
 
@@ -191,29 +197,31 @@ static ssize_t do_recv(int sd, char *buf, size_t len)
 	return 0;
 }
 
-static int bot(char *server, int port, char *channel)
+static int bot(char *server, int port)
 {
-	int sd;
-	char buf[2048];
+	static char buf[4096];
 
 	sd = do_connect(server, port);
 	if (sd < 0)
 		error(1, errno, "Failed connecting to %s:%d", server, port);
 
 	if (pass)
-		do_send(sd, "PASS %s\r\n", pass);
-	do_send(sd, "NICK %s\r\n", NICK);
-	do_send(sd, "USER %s 0 0 :%s\r\n", NICK, NAME);
-	sleep(2);
+		do_send("PASS %s\r\n", pass);
+	do_send("NICK %s\r\n", NICK);
+	do_send("USER %s 0 0 :%s\r\n", NICK, NAME);
 
-	while (1) {
-		if (!do_recv(sd, buf, sizeof(buf))) {
-			if (strstr(buf, "001 "))
-				do_send(sd, "JOIN #%s\r\n", channel);
+	while (loop) {
+		if (!do_recv(buf, sizeof(buf))) {
+			char *pos = strstr(buf, " ") + 1;
 
-			if (strstr(buf, "PING ")) {
-				char *pos = strstr(buf, " ") + 1;
-				do_send(sd, "PONG %s\r\n", pos);
+			if (strstr(pos, "001 "))
+				do_send("JOIN #%s\r\n", channel);
+			else if (strcasestr(pos, ":" NICK ":" " PING")) {
+				pos = strchr(buf, '!');
+				if (pos) {
+					*pos = 0;
+					do_send("PRIVMSG #%s %s: PONG\r\n", channel, &buf[1]);
+				}
 			}
 		}
 	}
@@ -234,10 +242,15 @@ static int usage(int rc)
 	return rc;
 }
 
+void sigint_cb(int signo __attribute__ ((unused)))
+{
+	do_send("PART #%s :%s\r\n", channel, partmsg);
+	loop = 0;
+}
+
 int main(int argc, char *argv[])
 {
 	int c;
-	char channel[42] = CHANNEL;
 	char server[256] = SERVER;
 	struct option long_options[] = {
 		{ "help",     0, NULL, 'h' },
@@ -248,6 +261,8 @@ int main(int argc, char *argv[])
 		{ NULL, 0, NULL, 0 }
 	};
 
+	signal(SIGINT,  sigint_cb);
+	signal(SIGTERM, sigint_cb);
 	while ((c = getopt_long(argc, argv, "h?l:p:sv", long_options, NULL)) != EOF) {
 		switch(c) {
 		case 'l':
@@ -277,7 +292,7 @@ int main(int argc, char *argv[])
 	if (optind < argc)
 		strncpy(channel, argv[optind++], sizeof(channel));
 
-	return bot(server, port, channel);
+	return bot(server, port);
 }
 
 /**
