@@ -50,6 +50,7 @@ static int      sd = -1;
 static int      debug = 0;
 static int      loop = 1;
 static char    *port = PORT;
+static char    *nick = NICK;
 static char     partmsg[42] = PARTMSG;
 static char     channel[42] = CHANNEL;
 static char    *pass = NULL;
@@ -227,8 +228,8 @@ static int bot(char *server, char *port)
 
 	if (pass)
 		do_send("PASS %s\r\n", pass);
-	do_send("NICK %s\r\n", NICK);
-	do_send("USER %s 0 0 :%s\r\n", NICK, NAME);
+	do_send("NICK %s\r\n", nick);
+	do_send("USER %s 0 0 :%s\r\n", nick, NAME);
 
 	while (loop) {
 		if (!do_recv(buf, BUFSZ)) {
@@ -263,6 +264,7 @@ static int usage(int rc)
 		"Options:\n"
 		"  -d, --debug           Enable debug messages\n"
 		"  -h, --help            This help text\n"
+		"  -n, --nick=NICK       Use NICK instead of default: " NICK "\n"
 		"      --password=PWD    Send PASS PWD to connect, use SSL!\n"
 		"  -p, --port=PORT       Connect to this port, default: 6667\n"
 		"  -s, --ssl             Connect using SSL/TLS\n"
@@ -284,6 +286,7 @@ int main(int argc, char *argv[])
 	struct option long_options[] = {
 		{ "debug",    0, NULL, 'd' },
 		{ "help",     0, NULL, 'h' },
+		{ "nick",     1, NULL, 'n' },
 		{ "password", 1, NULL, 'l' },
 		{ "port",     1, NULL, 'p' },
 		{ "ssl",      0, NULL, 's' },
@@ -293,10 +296,14 @@ int main(int argc, char *argv[])
 
 	signal(SIGINT,  sigint_cb);
 	signal(SIGTERM, sigint_cb);
-	while ((c = getopt_long(argc, argv, "dh?l:p:sv", long_options, NULL)) != EOF) {
+	while ((c = getopt_long(argc, argv, "dh?n:l:p:sv", long_options, NULL)) != EOF) {
 		switch(c) {
 		case 'd':
 			debug = 1;
+			break;
+
+		case 'n':
+			nick = strdup(optarg);
 			break;
 
 		case 'l':
