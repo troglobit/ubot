@@ -121,9 +121,11 @@ static int do_connect(char *server, unsigned int port)
 	if (ret < 0)
 		goto err;
 
-	ret = ssl_connect(sd);
-	if (ret < 0)
-		goto err;
+	if (ssl) {
+		ret = ssl_connect(sd);
+		if (ret < 0)
+			goto err;
+	}
 
 	return sd;
 err:
