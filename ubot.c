@@ -36,8 +36,9 @@
 
 #define DBG(fmt, args...) if (debug) fprintf(stderr, fmt "\n", ##args)
 
+#define BUFSZ   8192
 #define SERVER  "127.0.0.1"
-#define PORT    6667
+#define PORT    "6667"
 #define CHANNEL "ubot"
 #define NICK    "ubot"
 #define NAME    "ubot rulez"
@@ -48,7 +49,7 @@ static SSL_CTX *ssl_ctx;
 static int      sd = -1;
 static int      debug = 0;
 static int      loop = 1;
-static int      port = PORT;
+static char    *port = PORT;
 static char     partmsg[42] = PARTMSG;
 static char     channel[42] = CHANNEL;
 static char    *pass = NULL;
@@ -107,24 +108,39 @@ static int ssl_connect(int sd)
 	return 0;
 }
 
-static int do_connect(char *server, unsigned int port)
+static int do_connect(char *server, char *port)
 {
 	int sd, ret;
-	struct sockaddr_in sin;
+	struct addrinfo hints;
+	struct addrinfo *result, *rp;
 
-	sd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sd < 0)
+	memset(&hints, 0, sizeof(struct addrinfo));
+	hints.ai_family = AF_UNSPEC;    /* Allow IPv4 or IPv6 */
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = 0;
+	hints.ai_protocol = 0;
+
+	ret = getaddrinfo(server, port, &hints, &result);
+	if (ret)
 		return -1;
 
-	memset(&sin, 0, sizeof(sin));
-	if (inet_pton(AF_INET, server, &sin.sin_addr) <= 0)
-		goto err;
+	/* Iterate over all replys until we connect ... */
+	for (rp = result; rp; rp = rp->ai_next) {
+		sd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (sd < 0)
+			continue;
 
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(port);
-	ret = connect(sd, (struct sockaddr *)&sin, sizeof(sin));
-	if (ret < 0)
-		goto err;
+		if (!connect(sd, rp->ai_addr, rp->ai_addrlen))
+			break;          /* Success */
+
+		close(sd);
+	}
+
+	if (result)
+		freeaddrinfo(result);   /* No longer needed */
+
+	if (!rp)		        /* No address succeeded */
+		return -1;
 
 	if (ssl) {
 		ret = ssl_connect(sd);
@@ -197,13 +213,17 @@ static ssize_t do_recv(char *buf, size_t len)
 	return 0;
 }
 
-static int bot(char *server, int port)
+static int bot(char *server, char *port)
 {
-	static char buf[4096];
+	char *buf;
 
 	sd = do_connect(server, port);
 	if (sd < 0)
-		error(1, errno, "Failed connecting to %s:%d", server, port);
+		error(1, errno, "Failed connecting to %s:%s", server, port);
+
+	buf = malloc(BUFSZ);
+	if (!buf)
+		goto exit;
 
 	if (pass)
 		do_send("PASS %s\r\n", pass);
@@ -211,21 +231,29 @@ static int bot(char *server, int port)
 	do_send("USER %s 0 0 :%s\r\n", NICK, NAME);
 
 	while (loop) {
-		if (!do_recv(buf, sizeof(buf))) {
+		if (!do_recv(buf, BUFSZ)) {
 			char *pos = strstr(buf, " ") + 1;
 
-			if (strstr(pos, "001 "))
+			if (!pos)
+				continue;
+
+			if (strstr(buf, " 001 "))       /* Authenicated/registered */
 				do_send("JOIN #%s\r\n", channel);
-			else if (strcasestr(pos, ":" NICK ":" " PING")) {
+
+			if (!strncmp(buf, "PING ", 5)) /* Keepalive */
+				do_send("PONG %s\r\n", pos);
+
+			if (!strncmp(pos, "PRIVMSG ", 8)) {
 				pos = strchr(buf, '!');
-				if (pos) {
+				if (pos)
 					*pos = 0;
-					do_send("PRIVMSG #%s %s: PONG\r\n", channel, &buf[1]);
-				}
+				do_send("PRIVMSG #%s %s: :Why hello there, stranger!\r\n", channel, &buf[1]);
 			}
 		}
 	}
 
+	free(buf);
+exit:
 	return close(sd);
 }
 
@@ -270,7 +298,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'p':
-			port = atoi(optarg);
+			port = strdup(optarg);
 			break;
 
 		case 'v':
