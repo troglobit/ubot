@@ -52,7 +52,7 @@ static int      loop = 1;
 static char    *port = PORT;
 static char    *nick = NICK;
 static char     partmsg[42] = PARTMSG;
-static char     channel[42] = CHANNEL;
+static char    *channel = CHANNEL;
 static char    *pass = NULL;
 extern char  *__progname;
 
@@ -260,15 +260,17 @@ exit:
 
 static int usage(int rc)
 {
-	fprintf(stderr, "Usage: %s [OPTIONS] SERVER CHANNEL\n\n"
+	fprintf(stderr, "Usage: %s [OPTIONS] SERVER\n\n"
 		"Options:\n"
+		"  -c, --channel=CHAN    Join #CHAN on SERVER, default: " CHANNEL "\n"
 		"  -d, --debug           Enable debug messages\n"
 		"  -h, --help            This help text\n"
 		"  -n, --nick=NICK       Use NICK instead of default: " NICK "\n"
 		"      --password=PWD    Send PASS PWD to connect, use SSL!\n"
 		"  -p, --port=PORT       Connect to this port, default: 6667\n"
 		"  -s, --ssl             Connect using SSL/TLS\n"
-		"  -v, --version         Show version\n\n", __progname);
+		"  -v, --version         Show version\n\n"
+		"Remember: The PWD will be visible in the ps listing for other users to see!\n", __progname);
 
 	return rc;
 }
@@ -284,6 +286,7 @@ int main(int argc, char *argv[])
 	int c;
 	char server[256] = SERVER;
 	struct option long_options[] = {
+		{ "channel",  1, NULL, 'c' },
 		{ "debug",    0, NULL, 'd' },
 		{ "help",     0, NULL, 'h' },
 		{ "nick",     1, NULL, 'n' },
@@ -296,8 +299,12 @@ int main(int argc, char *argv[])
 
 	signal(SIGINT,  sigint_cb);
 	signal(SIGTERM, sigint_cb);
-	while ((c = getopt_long(argc, argv, "dh?n:l:p:sv", long_options, NULL)) != EOF) {
+	while ((c = getopt_long(argc, argv, "c:dh?n:l:p:sv", long_options, NULL)) != EOF) {
 		switch(c) {
+		case 'c':
+			channel = strdup(optarg);
+			break;
+
 		case 'd':
 			debug = 1;
 			break;
@@ -330,8 +337,6 @@ int main(int argc, char *argv[])
 
 	if (optind < argc)
 		strncpy(server, argv[optind++], sizeof(server));
-	if (optind < argc)
-		strncpy(channel, argv[optind++], sizeof(channel));
 
 	return bot(server, port);
 }
