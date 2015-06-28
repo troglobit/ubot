@@ -217,6 +217,7 @@ static ssize_t do_recv(char *buf, size_t len)
 static int bot(char *server, char *port)
 {
 	char *buf;
+	char nickm[42];
 
 	sd = do_connect(server, port);
 	if (sd < 0)
@@ -231,6 +232,7 @@ static int bot(char *server, char *port)
 	do_send("NICK %s\r\n", nick);
 	do_send("USER %s 0 0 :%s\r\n", nick, NAME);
 
+	snprintf(nickm, sizeof(nickm), ":%s:", nick);
 	while (loop) {
 		if (!do_recv(buf, BUFSZ)) {
 			char *pos = strstr(buf, " ") + 1;
@@ -244,7 +246,7 @@ static int bot(char *server, char *port)
 			if (!strncmp(buf, "PING ", 5)) /* Keepalive */
 				do_send("PONG %s\r\n", pos);
 
-			if (!strncmp(pos, "PRIVMSG ", 8)) {
+			if (!strncmp(pos, "PRIVMSG ", 8) && strstr(pos, nickm)) {
 				pos = strchr(buf, '!');
 				if (pos)
 					*pos = 0;
